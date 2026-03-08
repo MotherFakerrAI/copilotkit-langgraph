@@ -1,0 +1,16 @@
+# CopilotKit LangGraph 后端依赖
+
+# 核心框架
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+
+# AG-UI 协议
+ag-ui-langgraph>=0.1.0
+
+# Web 服务
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# 环境变量
+python-dotenv>=1.0.0
