@@ -1,13 +1,15 @@
 """
-IdeaForge - 决策导航仪 + 创意孵化器
+LearnLoop - 学习伴侣（监督式学习）
 基于 CopilotKit AG-UI 协议
 
 功能：
-1. 决策导航仪 - 帮助用户做出明智决策
-2. 创意孵化器 - 验证创意并生成 MVP 计划
+1. 学习目标设定
+2. 学习路径规划
+3. 每日打卡
+4. 进度可视化
 """
 
-from typing import Annotated, TypedDict, List, Optional
+from typing import Annotated, TypedDict, List, Optional, Dict
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,14 +18,13 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 import os
-import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ==================== 环境配置 ====================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "sk-demo-key")
 
 # ==================== FastAPI 应用 ====================
-app = FastAPI(title="IdeaForge Backend")
+app = FastAPI(title="LearnLoop Backend")
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,408 +40,348 @@ memory_store = {
     "history": []    # 历史记录
 }
 
-# ==================== 决策导航仪 State ====================
-class DecisionState(TypedDict):
-    """决策导航仪状态"""
+# ==================== LearnState 定义 ====================
+class LearnState(TypedDict):
+    """学习伴侣状态"""
     messages: Annotated[List, add_messages]
-    problem: str              # 决策问题
-    dimensions: List[str]     # 决策维度
-    options: List[str]        # 选项列表
-    matrix: dict              # 对比矩阵
-    report: str               # 决策报告
-    step: str                 # 当前步骤
+    user_id: str                 # 用户 ID（MVP 用 session）
+    goal: str                    # 学习目标
+    subject: str                 # 学科/技能
+    deadline: str                # 截止日期
+    plan: dict                   # 学习计划 {week1: [...], week2: [...]}
+    progress: dict               # 进度记录 {date: status}
+    weak_points: List[str]       # 弱点列表
+    streak: int                  # 连续打卡天数
+    step: str                    # 当前步骤
 
-# ==================== 创意孵化器 State ====================
-class IdeaState(TypedDict):
-    """创意孵化器状态"""
-    messages: Annotated[List, add_messages]
-    idea: str                 # 创意想法
-    pain_point: str           # 痛点描述
-    target_users: str         # 目标用户
-    mvp_features: List[str]   # MVP 功能
-    plan: dict                # 执行计划
-    step: str                 # 当前步骤
-
-# ==================== 决策导航仪节点 ====================
-def decision_clarify_node(state: DecisionState) -> DecisionState:
-    """步骤 1: 澄清决策问题"""
+# ==================== Node 函数 ====================
+def goal_node(state: LearnState) -> LearnState:
+    """步骤 1: 设定学习目标"""
     messages = state["messages"]
     last_message = messages[-1] if messages else None
     
     if not last_message or not isinstance(last_message, HumanMessage):
         return state
     
-    problem = last_message.content.strip()
+    goal = last_message.content.strip()
     
-    # 预设决策维度
-    dimensions = [
-        "💰 经济收益（薪资/成本）",
-        "📈 成长空间（技能/职业发展）",
-        "👥 团队环境（同事/领导）",
-        "⚖️ 工作生活平衡",
-        "🎯 个人兴趣匹配度",
-        "⚠️ 风险评估"
-    ]
+    # 解析目标（简单关键词提取）
+    subject = "通用技能"
+    deadline = "3 个月"
     
-    response = f"""📋 **决策问题：{problem}**
+    # 检测学科关键词
+    if any(kw in goal.lower() for kw in ['python', '编程', '代码']):
+        subject = "Python 编程"
+    elif any(kw in goal.lower() for kw in ['英语', 'english', '语言']):
+        subject = "英语学习"
+    elif any(kw in goal.lower() for kw in ['数学', 'math']):
+        subject = "数学"
+    
+    # 检测时间关键词
+    if any(kw in goal for kw in ['1 个月', '一个月', '30 天']):
+        deadline = "1 个月"
+    elif any(kw in goal for kw in ['3 个月', '三个月', '90 天']):
+        deadline = "3 个月"
+    elif any(kw in goal for kw in ['6 个月', '六个月', '180 天']):
+        deadline = "6 个月"
+    
+    response = f"""🎯 **学习目标：{goal}**
 
-我将从以下维度帮你分析：
+**学科：** {subject}
+**期限：** {deadline}
 
-{' | '.join(dimensions[:3])}
-{' | '.join(dimensions[3:])}
-
-请告诉我你有哪几个选项？（2-3 个）
-例如：
-- 选项 A: 留在当前公司
-- 选项 B: 跳槽到新公司
-"""
-    
-    return {
-        **state,
-        "problem": problem,
-        "dimensions": dimensions,
-        "step": "collecting_options"
-    }
-
-def decision_options_node(state: DecisionState) -> DecisionState:
-    """步骤 2: 收集选项"""
-    messages = state["messages"]
-    
-    # 解析用户输入的选项
-    last_message = messages[-1].content if messages else ""
-    
-    # 简单解析选项（实际项目中用 LLM 解析）
-    options = []
-    for line in last_message.split('\n'):
-        line = line.strip()
-        if line and any(marker in line for marker in ['选项', 'Option', '-', '•', '1.', '2.', '3.']):
-            # 清理文本
-            option = line.lstrip('-•').strip()
-            for marker in ['选项', 'Option', '1.', '2.', '3.']:
-                option = option.replace(marker, '').strip()
-            if option and len(option) > 2:
-                options.append(option)
-    
-    # 如果选项不足，使用默认
-    if len(options) < 2:
-        options = ["选项 A", "选项 B"]
-    
-    response = f"""✅ 收到 {len(options)} 个选项：
-{chr(10).join(f'• {opt}' for opt in options)}
-
-正在生成对比矩阵，请稍候...
-"""
-    
-    return {
-        **state,
-        "options": options,
-        "step": "generating_matrix"
-    }
-
-def decision_matrix_node(state: DecisionState) -> DecisionState:
-    """步骤 3: 生成对比矩阵"""
-    options = state.get("options", [])
-    dimensions = state.get("dimensions", [])
-    
-    # 生成对比矩阵（MVP 用模拟数据）
-    matrix = {
-        "headers": ["维度"] + options,
-        "rows": []
-    }
-    
-    for dim in dimensions:
-        row = [dim]
-        for opt in options:
-            # 模拟评分（实际项目中用 LLM 生成）
-            import random
-            score = random.choice(["✅ 优势", "⚠️ 中性", "❌ 劣势"])
-            row.append(score)
-        matrix["rows"].append(row)
-    
-    response = f"""📊 **对比矩阵**
-
-| {' | '.join(matrix['headers'])} |
-|{'|'.join(['---'] * len(matrix['headers']))}|
-"""
-    for row in matrix["rows"]:
-        response += f"| {' | '.join(row)} |\n"
-    
-    response += "\n正在生成决策报告..."
-    
-    return {
-        **state,
-        "matrix": matrix,
-        "step": "generating_report"
-    }
-
-def decision_report_node(state: DecisionState) -> DecisionState:
-    """步骤 4: 生成决策报告"""
-    problem = state.get("problem", "")
-    options = state.get("options", [])
-    dimensions = state.get("dimensions", [])
-    
-    # 生成决策报告
-    report = f"""# 📋 决策报告
-
-## 决策问题
-{problem}
-
-## 对比维度
-{chr(10).join(f'- {dim}' for dim in dimensions)}
-
-## 选项分析
-{chr(10).join(f'### {opt}' for opt in options)}
-
-## 建议
-基于以上分析，建议综合考虑各维度权重，选择最符合你长期目标的选项。
+正在为你生成学习路径...
 
 ---
-*生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}*
-*IdeaForge 决策导航仪*
+💡 学习路径已生成！我将帮你：
+1. 拆解成周任务
+2. 制定每日待办
+3. 跟踪进度和打卡
+4. 分析弱点并调整计划
+
+准备好了吗？我们开始吧！📚
+"""
+    
+    # 生成学习计划（MVP 用模板）
+    plan = generate_learning_plan(subject, deadline)
+    
+    return {
+        **state,
+        "goal": goal,
+        "subject": subject,
+        "deadline": deadline,
+        "plan": plan,
+        "step": "plan_created"
+    }
+
+def plan_node(state: LearnState) -> LearnState:
+    """步骤 2: 展示学习计划"""
+    plan = state.get("plan", {})
+    subject = state.get("subject", "")
+    
+    response = f"""📚 **{subject} 学习路径**
+
+"""
+    
+    # 展示周计划
+    for week_num in range(1, min(5, len(plan) + 1)):
+        week_key = f"week_{week_num}"
+        if week_key in plan:
+            week_data = plan[week_key]
+            response += f"""**第{week_num}周：{week_data.get('focus', '学习主题')}**
+"""
+            for i, task in enumerate(week_data.get('tasks', [])[:3], 1):
+                response += f"  {i}. {task}\n"
+            response += "\n"
+    
+    response += """---
+💡 **每日打卡说明：**
+- 每天完成后回复"打卡"或"完成今日任务"
+- 我会记录你的进度
+- 连续打卡有奖励哦！🏆
+
+现在告诉我，你想从第几周开始？或者直接说"开始学习"！
+"""
+    
+    return {
+        **state,
+        "step": "ready_to_start"
+    }
+
+def checkin_node(state: LearnState) -> LearnState:
+    """步骤 3: 每日打卡"""
+    messages = state["messages"]
+    
+    # 获取今天日期
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # 更新进度
+    progress = state.get("progress", {})
+    progress[today] = {
+        "status": "completed",
+        "date": today,
+        "note": "完成今日任务"
+    }
+    
+    # 计算连续打卡天数
+    streak = calculate_streak(progress)
+    
+    # 获取今日任务
+    today_task = get_today_task(state.get("plan", {}), progress)
+    
+    response = f"""✅ **打卡成功！**
+
+📅 日期：{today}
+🔥 连续打卡：{streak} 天
+📊 总完成：{len(progress)} 天
+
+"""
+    
+    if streak >= 7:
+        response += f"""🏆 **成就解锁！**
+连续打卡{streak}天，太棒了！继续保持！🎉
+
+"""
+    
+    response += f"""---
+📋 **今日任务：**
+{today_task}
+
+明天继续加油！💪
 """
     
     # 保存到历史记录
     history_item = {
-        "id": f"decision_{len(memory_store['history']) + 1}",
-        "type": "decision",
-        "problem": problem,
-        "created_at": datetime.now().isoformat(),
-        "report": report
+        "id": f"checkin_{len(memory_store['history']) + 1}",
+        "type": "checkin",
+        "date": today,
+        "streak": streak,
+        "created_at": datetime.now().isoformat()
     }
     memory_store["history"].append(history_item)
     
-    response = f"""✅ **决策报告已生成！**
+    return {
+        **state,
+        "progress": progress,
+        "streak": streak,
+        "step": "checked_in"
+    }
 
-{report}
+def review_node(state: LearnState) -> LearnState:
+    """步骤 4: 复习进度"""
+    progress = state.get("progress", {})
+    plan = state.get("plan", {})
+    goal = state.get("goal", "")
+    
+    total_days = len(progress)
+    streak = state.get("streak", 0)
+    
+    # 计算完成度
+    total_tasks = sum(len(week.get('tasks', [])) for week in plan.values())
+    completed_tasks = total_days * 3  # 假设每天 3 个任务
+    completion_rate = min(100, int((completed_tasks / max(1, total_tasks)) * 100))
+    
+    response = f"""📊 **学习进度报告**
 
+🎯 目标：{goal}
+
+**整体进度：**
+完成度：{completion_rate}%
+已学习：{total_days} 天
+连续打卡：{streak} 天 🔥
+
+"""
+    
+    # 弱点分析（MVP 简单版本）
+    weak_points = state.get("weak_points", [])
+    if not weak_points and total_days >= 3:
+        weak_points = ["需要加强复习", "可以增加练习量"]
+        response += f"""**弱点分析：**
+{chr(10).join(f'• {wp}' for wp in weak_points)}
+
+建议：
+1. 每周安排 1 次复习日
+2. 增加实践练习比例
+
+"""
+    
+    # 进度可视化（文本版）
+    response += f"""**最近打卡记录：**
+"""
+    recent_dates = sorted(progress.keys())[-5:]
+    for date in recent_dates:
+        status_emoji = "✅" if progress[date].get("status") == "completed" else "⏳"
+        response += f"{status_emoji} {date}\n"
+    
+    response += f"""
 ---
-💡 你可以：
-1. 复制报告保存
-2. 开始新的决策
-3. 切换到"创意孵化器"
+💡 继续加油！坚持就是胜利！🚀
 """
     
     return {
         **state,
-        "report": report,
-        "step": "completed"
+        "weak_points": weak_points,
+        "step": "reviewed"
     }
 
-# ==================== 创意孵化器节点 ====================
-def idea_validate_node(state: IdeaState) -> IdeaState:
-    """步骤 1: 验证痛点"""
-    messages = state["messages"]
-    last_message = messages[-1] if messages else None
+# ==================== 辅助函数 ====================
+def generate_learning_plan(subject: str, deadline: str) -> dict:
+    """生成学习计划（MVP 用模板）"""
     
-    if not last_message or not isinstance(last_message, HumanMessage):
-        return state
-    
-    idea = last_message.content.strip()
-    
-    response = f"""💡 **创意：{idea}**
-
-让我帮你验证这个创意的价值。
-
-**问题 1/3：** 这个创意解决了什么痛点？
-请描述目标用户当前的困扰或需求。
-"""
-    
-    return {
-        **state,
-        "idea": idea,
-        "step": "validating_pain_point"
-    }
-
-def idea_users_node(state: IdeaState) -> IdeaState:
-    """步骤 2: 定义目标用户"""
-    messages = state["messages"]
-    last_message = messages[-1].content if messages else ""
-    
-    pain_point = last_message.strip()
-    
-    response = f"""✅ 痛点：{pain_point}
-
-**问题 2/3：** 谁是你的目标用户？
-请描述用户画像（年龄/职业/特征等）
-"""
-    
-    return {
-        **state,
-        "pain_point": pain_point,
-        "step": "defining_users"
-    }
-
-def idea_features_node(state: IdeaState) -> IdeaState:
-    """步骤 3: 优先功能"""
-    messages = state["messages"]
-    last_message = messages[-1].content if messages else ""
-    
-    target_users = last_message.strip()
-    
-    # 生成 MVP 功能列表
-    mvp_features = [
-        "核心功能 1: 解决主要痛点的基础功能",
-        "核心功能 2: 最小可用产品必需",
-        "辅助功能 1: 提升用户体验",
-        "辅助功能 2: 差异化特色"
-    ]
-    
-    response = f"""✅ 目标用户：{target_users}
-
-**问题 3/3：** 基于以上信息，我为你生成了 MVP 功能列表：
-
-{chr(10).join(f'{i+1}. {f}' for i, f in enumerate(mvp_features))}
-
-是否调整或确认？
-"""
-    
-    return {
-        **state,
-        "target_users": target_users,
-        "mvp_features": mvp_features,
-        "step": "creating_plan"
-    }
-
-def idea_plan_node(state: IdeaState) -> IdeaState:
-    """步骤 4: 创建执行计划"""
-    mvp_features = state.get("mvp_features", [])
-    
-    # 生成 4 周执行计划
-    plan = {
-        "week_1": {
-            "focus": "需求确认 + 技术选型",
-            "tasks": ["完善需求文档", "技术栈调研", "搭建开发环境"]
+    # 不同学科的模板
+    plans = {
+        "Python 编程": {
+            "week_1": {
+                "focus": "Python 基础语法",
+                "tasks": ["变量和数据类型", "条件语句和循环", "函数定义", "列表和字典"]
+            },
+            "week_2": {
+                "focus": "面向对象编程",
+                "tasks": ["类和对象", "继承和多态", "异常处理", "模块和包"]
+            },
+            "week_3": {
+                "focus": "常用库学习",
+                "tasks": ["文件操作", "数据处理 (pandas)", "网络请求", "数据可视化"]
+            },
+            "week_4": {
+                "focus": "实战项目",
+                "tasks": ["小项目设计", "代码实现", "测试调试", "文档编写"]
+            }
         },
-        "week_2": {
-            "focus": "核心功能开发",
-            "tasks": ["实现核心功能 1", "实现核心功能 2", "内部测试"]
-        },
-        "week_3": {
-            "focus": "辅助功能 + 优化",
-            "tasks": ["实现辅助功能", "UI/UX优化", "性能调优"]
-        },
-        "week_4": {
-            "focus": "测试 + 发布",
-            "tasks": ["完整测试", "Bug 修复", "上线发布"]
+        "英语学习": {
+            "week_1": {
+                "focus": "词汇积累",
+                "tasks": ["每日 50 词", "词根词缀", "同义词辨析", "词汇复习"]
+            },
+            "week_2": {
+                "focus": "语法强化",
+                "tasks": ["时态语态", "从句结构", "非谓语动词", "语法练习"]
+            },
+            "week_3": {
+                "focus": "听说训练",
+                "tasks": ["听力练习", "口语跟读", "对话模拟", "发音纠正"]
+            },
+            "week_4": {
+                "focus": "阅读写作",
+                "tasks": ["阅读理解", "写作练习", "作文修改", "综合测试"]
+            }
         }
     }
     
-    # 生成报告
-    report = f"""# 🚀 MVP 执行计划
-
-## 创意
-{state.get('idea', '')}
-
-## 痛点
-{state.get('pain_point', '')}
-
-## 目标用户
-{state.get('target_users', '')}
-
-## MVP 功能
-{chr(10).join(f'- {f}' for f in mvp_features)}
-
-## 4 周计划
-
-### 第 1 周：{plan['week_1']['focus']}
-{chr(10).join(f'- {t}' for t in plan['week_1']['tasks'])}
-
-### 第 2 周：{plan['week_2']['focus']}
-{chr(10).join(f'- {t}' for t in plan['week_2']['tasks'])}
-
-### 第 3 周：{plan['week_3']['focus']}
-{chr(10).join(f'- {t}' for t in plan['week_3']['tasks'])}
-
-### 第 4 周：{plan['week_4']['focus']}
-{chr(10).join(f'- {t}' for t in plan['week_4']['tasks'])}
-
----
-*生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}*
-*IdeaForge 创意孵化器*
-"""
-    
-    # 保存到历史记录
-    history_item = {
-        "id": f"idea_{len(memory_store['history']) + 1}",
-        "type": "idea",
-        "idea": state.get('idea', ''),
-        "created_at": datetime.now().isoformat(),
-        "report": report
+    # 默认计划
+    default_plan = {
+        "week_1": {"focus": "基础知识", "tasks": ["概念学习", "基础练习", "复习总结"]},
+        "week_2": {"focus": "进阶内容", "tasks": ["深入学习", "实践应用", "复习总结"]},
+        "week_3": {"focus": "实战练习", "tasks": ["项目实践", "问题解决", "复习总结"]},
+        "week_4": {"focus": "综合提升", "tasks": ["综合测试", "弱点强化", "总结复盘"]}
     }
-    memory_store["history"].append(history_item)
     
-    response = f"""✅ **MVP 执行计划已生成！**
+    return plans.get(subject, default_plan)
 
-{report}
+def calculate_streak(progress: dict) -> int:
+    """计算连续打卡天数"""
+    if not progress:
+        return 0
+    
+    today = datetime.now().date()
+    streak = 0
+    
+    for i in range(365):  # 最多回溯 365 天
+        check_date = today - timedelta(days=i)
+        date_str = check_date.strftime("%Y-%m-%d")
+        
+        if date_str in progress:
+            streak += 1
+        elif i > 0:  # 今天没打卡也算连续
+            break
+        else:
+            streak += 1  # 今天打卡了
+    
+    return streak
 
----
-💡 你可以：
-1. 复制计划保存
-2. 开始新的创意
-3. 切换到"决策导航仪"
-"""
+def get_today_task(plan: dict, progress: dict) -> str:
+    """获取今日任务"""
+    if not plan:
+        return "暂无计划"
     
-    return {
-        **state,
-        "plan": plan,
-        "step": "completed"
-    }
+    # 简单返回第一周任务（MVP）
+    first_week = plan.get("week_1", {})
+    tasks = first_week.get("tasks", ["学习任务"])
+    
+    return "\n".join(f"• {task}" for task in tasks[:3])
 
-# ==================== 构建 Graphs ====================
-def build_decision_graph():
-    """构建决策导航仪图"""
-    graph = StateGraph(DecisionState)
+# ==================== 构建 Graph ====================
+def build_learn_graph():
+    """构建学习伴侣图"""
+    graph = StateGraph(LearnState)
     
-    graph.add_node("clarify", decision_clarify_node)
-    graph.add_node("options", decision_options_node)
-    graph.add_node("matrix", decision_matrix_node)
-    graph.add_node("report", decision_report_node)
+    graph.add_node("goal", goal_node)
+    graph.add_node("plan", plan_node)
+    graph.add_node("checkin", checkin_node)
+    graph.add_node("review", review_node)
     
-    graph.add_edge(START, "clarify")
-    graph.add_edge("clarify", "options")
-    graph.add_edge("options", "matrix")
-    graph.add_edge("matrix", "report")
-    graph.add_edge("report", END)
+    # 定义流程
+    graph.add_edge(START, "goal")
+    graph.add_edge("goal", "plan")
+    graph.add_edge("plan", "checkin")  # 默认进入打卡流程
+    
+    # 根据条件跳转（简化版）
+    graph.add_edge("checkin", "review")  # 打卡后可查看进度
+    graph.add_edge("review", END)
     
     return graph.compile()
 
-def build_idea_graph():
-    """构建创意孵化器图"""
-    graph = StateGraph(IdeaState)
-    
-    graph.add_node("validate", idea_validate_node)
-    graph.add_node("users", idea_users_node)
-    graph.add_node("features", idea_features_node)
-    graph.add_node("plan", idea_plan_node)
-    
-    graph.add_edge(START, "validate")
-    graph.add_edge("validate", "users")
-    graph.add_edge("users", "features")
-    graph.add_edge("features", "plan")
-    graph.add_edge("plan", END)
-    
-    return graph.compile()
-
-# 编译 Graphs
-decision_graph = build_decision_graph()
-idea_graph = build_idea_graph()
+# 编译 Graph
+learn_graph = build_learn_graph()
 
 # ==================== AG-UI 桥接 ====================
-# 决策导航仪端点
-decision_bridge = AGUIBridge(
-    graph=decision_graph,
-    input_schema=DecisionState,
+learn_bridge = AGUIBridge(
+    graph=learn_graph,
+    input_schema=LearnState,
 )
 
-# 创意孵化器端点
-idea_bridge = AGUIBridge(
-    graph=idea_graph,
-    input_schema=IdeaState,
-)
-
-# 注册路由（使用不同 agent 标识）
-decision_bridge.register_routes(app, prefix="/decision")
-idea_bridge.register_routes(app, prefix="/idea")
+# 注册路由
+learn_bridge.register_routes(app, prefix="/learn")
 
 # ==================== 辅助 API ====================
 @app.get("/health")
@@ -448,7 +389,7 @@ async def health_check():
     """健康检查"""
     return {
         "status": "ok",
-        "service": "ideaforge-backend",
+        "service": "learnloop-backend",
         "version": "0.1.0"
     }
 
@@ -456,22 +397,26 @@ async def health_check():
 async def get_history():
     """获取历史记录"""
     return {
-        "history": memory_store["history"][-10:]  # 最近 10 条
+        "history": memory_store["history"][-10:]
     }
 
-@app.delete("/api/history")
-async def clear_history():
-    """清空历史记录"""
-    memory_store["history"] = []
-    return {"status": "ok"}
+@app.get("/api/progress")
+async def get_progress(session_id: str = "default"):
+    """获取学习进度"""
+    session = memory_store["sessions"].get(session_id, {})
+    return {
+        "goal": session.get("goal", ""),
+        "progress": session.get("progress", {}),
+        "streak": session.get("streak", 0),
+        "plan": session.get("plan", {})
+    }
 
 # ==================== 主入口 ====================
 if __name__ == "__main__":
     import uvicorn
     
-    print("🚀 启动 IdeaForge 后端...")
-    print("📡 决策导航仪：http://localhost:8000/decision")
-    print("📡 创意孵化器：http://localhost:8000/idea")
+    print("🚀 启动 LearnLoop 后端...")
+    print("📡 学习伴侣端点：http://localhost:8000/learn")
     print("🏥 健康检查：http://localhost:8000/health")
     
     uvicorn.run(

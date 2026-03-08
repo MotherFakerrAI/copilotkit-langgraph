@@ -6,10 +6,10 @@ import { CopilotChat } from "@copilotkit/react-ui";
 import "@copilotkit/react-ui/styles.css";
 
 // 模式类型
-type Mode = 'decision' | 'idea' | null;
+type Mode = 'learn' | 'decision' | 'idea' | null;
 
 export default function Home() {
-  const [mode, setMode] = useState<Mode>(null);
+  const [mode, setMode] = useState<Mode>('learn'); // 默认学习伴侣
   const [runtimeUrl, setRuntimeUrl] = useState('/api/copilotkit');
 
   // 模式卡片组件
@@ -28,7 +28,9 @@ export default function Home() {
   }) => (
     <div 
       onClick={() => onSelect(id)}
-      className="bg-white rounded-xl shadow-lg p-6 cursor-pointer hover:shadow-xl transition-shadow border-2 border-transparent hover:border-blue-500"
+      className={`bg-white rounded-xl shadow-lg p-6 cursor-pointer hover:shadow-xl transition-shadow border-2 ${
+        mode === id ? 'border-blue-500' : 'border-transparent hover:border-blue-500'
+      }`}
     >
       <div className="text-4xl mb-4">{icon}</div>
       <h3 className="text-xl font-bold text-gray-800 mb-2">{title}</h3>
@@ -39,15 +41,17 @@ export default function Home() {
   // 返回首页
   const goHome = () => {
     setMode(null);
-    setRuntimeUrl('/api/copilotkit');
   };
 
   return (
     <CopilotKit
       runtimeUrl={runtimeUrl}
-      agent={mode === 'decision' ? 'decision_agent' : 'idea_agent'}
+      agent={
+        mode === 'decision' ? 'decision_agent' : 
+        mode === 'idea' ? 'idea_agent' : 'learn_agent'
+      }
     >
-      <main className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
+      <main className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-purple-50">
         <div className="container mx-auto px-4 py-8">
           {/* Header */}
           <header className="text-center mb-8">
@@ -59,23 +63,33 @@ export default function Home() {
                 ← 返回
               </button>
             </div>
-            <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 bg-clip-text text-transparent mb-3">
-              💡 IdeaForge
+            <h1 className="text-5xl font-bold bg-gradient-to-r from-green-600 via-blue-600 to-purple-600 bg-clip-text text-transparent mb-3">
+              📚 LearnLoop
             </h1>
             <p className="text-gray-600 text-lg">
-              决策导航仪 + 创意孵化器
+              监督式学习伴侣
             </p>
           </header>
 
           {/* 模式选择 */}
           {!mode && (
-            <div className="max-w-4xl mx-auto">
-              <div className="grid md:grid-cols-2 gap-6 mb-8">
+            <div className="max-w-6xl mx-auto">
+              <div className="grid md:grid-cols-3 gap-6 mb-8">
+                <ModeCard
+                  id="learn"
+                  title="📚 学习伴侣"
+                  icon="📚"
+                  description="设定学习目标，AI 帮你规划路径、每日打卡、跟踪进度。"
+                  onSelect={(id) => {
+                    setMode(id);
+                    setRuntimeUrl('/api/learn');
+                  }}
+                />
                 <ModeCard
                   id="decision"
                   title="🧭 决策导航仪"
                   icon="🧭"
-                  description="面临选择困难？帮你分析各维度，生成对比矩阵，做出明智决策。"
+                  description="面临选择困难？帮你分析各维度，做出明智决策。"
                   onSelect={(id) => {
                     setMode(id);
                     setRuntimeUrl('/api/decision');
@@ -85,7 +99,7 @@ export default function Home() {
                   id="idea"
                   title="🚀 创意孵化器"
                   icon="🚀"
-                  description="有好点子？帮你验证痛点，定义 MVP，生成 4 周执行计划。"
+                  description="有好点子？帮你验证痛点，定义 MVP，生成执行计划。"
                   onSelect={(id) => {
                     setMode(id);
                     setRuntimeUrl('/api/idea');
@@ -96,23 +110,32 @@ export default function Home() {
               {/* 使用说明 */}
               <div className="bg-white rounded-xl shadow-lg p-6">
                 <h2 className="text-xl font-bold text-gray-800 mb-4">💡 使用指南</h2>
-                <div className="grid md:grid-cols-2 gap-6">
+                <div className="grid md:grid-cols-3 gap-6">
+                  <div>
+                    <h3 className="font-semibold text-green-600 mb-2">📚 学习伴侣</h3>
+                    <ol className="text-gray-600 text-sm space-y-1 list-decimal list-inside">
+                      <li>输入学习目标（如"3 个月学会 Python"）</li>
+                      <li>AI 生成学习路径和周计划</li>
+                      <li>每日打卡报告进度</li>
+                      <li>查看进度和成就</li>
+                    </ol>
+                  </div>
                   <div>
                     <h3 className="font-semibold text-blue-600 mb-2">🧭 决策导航仪</h3>
                     <ol className="text-gray-600 text-sm space-y-1 list-decimal list-inside">
-                      <li>输入你的决策问题（如"要不要跳槽"）</li>
-                      <li>AI 会从多个维度追问澄清</li>
-                      <li>输入 2-3 个选项</li>
-                      <li>生成对比矩阵和决策报告</li>
+                      <li>输入决策问题</li>
+                      <li>AI 从多维度追问</li>
+                      <li>输入选项</li>
+                      <li>生成对比矩阵和报告</li>
                     </ol>
                   </div>
                   <div>
                     <h3 className="font-semibold text-purple-600 mb-2">🚀 创意孵化器</h3>
                     <ol className="text-gray-600 text-sm space-y-1 list-decimal list-inside">
-                      <li>输入你的创意想法</li>
-                      <li>AI 引导验证痛点和目标用户</li>
-                      <li>生成 MVP 功能列表</li>
-                      <li>输出 4 周执行计划</li>
+                      <li>输入创意想法</li>
+                      <li>验证痛点和用户</li>
+                      <li>生成 MVP 功能</li>
+                      <li>输出 4 周计划</li>
                     </ol>
                   </div>
                 </div>
@@ -127,12 +150,16 @@ export default function Home() {
                 <CopilotChat
                   className="h-[600px]"
                   placeholder={
-                    mode === 'decision' 
+                    mode === 'learn'
+                      ? "输入你的学习目标，例如：3 个月学会 Python"
+                      : mode === 'decision'
                       ? "输入你的决策问题，例如：要不要跳槽？"
                       : "输入你的创意想法，例如：做一个 AI 写作工具"
                   }
                   labels={{
-                    initial: mode === 'decision'
+                    initial: mode === 'learn'
+                      ? "📚 你好！我是你的学习伴侣。告诉我你想学什么，我来帮你规划学习路径！"
+                      : mode === 'decision'
                       ? "🧭 你好！我来帮你做出明智决策。请告诉我你面临的选择问题。"
                       : "🚀 你好！我来帮你孵化创意。请告诉我你的想法。"
                   }}
